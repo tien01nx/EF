@@ -1,0 +1,1383 @@
+
+## 📋 Tổng quan Architecture
+
+Component này được thiết kế theo **Reactive Programming Pattern** với:
+
+- **BehaviorSubject** cho state management
+- **Infinite Scroll** thay pagination
+- **Real-time filtering** với RxJS operators
+- **Bulk operations** với multi-select
+- **Excel export** tích hợp sẵn
+
+---
+
+
+
+```typescript
+/**
+ * ✏️ THAY ĐỔI: Interface theo data model của bạn
+ * Giữ lại field 'checked' cho multi-selection
+ */
+export interface YourDataModel {
+  id: number;
+  // ✏️ Thêm các field của data model bạn
+  name: string;
+  code: string;
+  status: number;
+  createDate: Date;
+  createBy: string;
+  // ... thêm các field khác
+
+  // ⚠️ LUÔN GIỮ LẠI - cho checkbox selection
+  checked: boolean;
+}
+```
+
+---
+
+### **BƯỚC 2: 📦 Imports - **
+
+```typescript
+// - Toàn bộ imports
+import {
+  Component,
+  OnInit,
+  OnDestroy,
+  ElementRef,
+  ViewChild,
+} from "@angular/core";
+import { CommonModule } from "@angular/common";
+import {
+  FormsModule,
+  ReactiveFormsModule,
+  FormBuilder,
+  FormGroup,
+  Validators,
+} from "@angular/forms";
+import { inject } from "@angular/core";
+import { NzTableModule } from "ng-zorro-antd/table";
+import { NzTagModule } from "ng-zorro-antd/tag";
+import { NzIconModule } from "ng-zorro-antd/icon";
+import { NzButtonModule } from "ng-zorro-antd/button";
+import { NzDividerModule } from "ng-zorro-antd/divider";
+import { NzStatisticModule } from "ng-zorro-antd/statistic";
+import { NzCardModule } from "ng-zorro-antd/card";
+import { NzGridModule } from "ng-zorro-antd/grid";
+import { NzInputModule } from "ng-zorro-antd/input";
+import { NzDatePickerModule } from "ng-zorro-antd/date-picker";
+import { NzInputNumberModule } from "ng-zorro-antd/input-number";
+import { NzSelectModule } from "ng-zorro-antd/select";
+import { NzDrawerModule } from "ng-zorro-antd/drawer";
+import { NzFormModule } from "ng-zorro-antd/form";
+import { NzTimePickerModule } from "ng-zorro-antd/time-picker";
+import { NzMessageService } from "ng-zorro-antd/message";
+import { NzSwitchModule } from "ng-zorro-antd/switch";
+import { NzAlertModule } from "ng-zorro-antd/alert";
+import { NzCheckboxModule } from "ng-zorro-antd/checkbox";
+import { NzPopconfirmModule } from "ng-zorro-antd/popconfirm";
+import { NzSpinModule } from "ng-zorro-antd/spin";
+import { BaseComponent } from "../../base/base/base.component";
+import { NzModalModule, NzModalService } from "ng-zorro-antd/modal";
+import { HttpErrorResponse } from "@angular/common/http";
+// ✏️ Bỏ chart components nếu không cần
+// import { ChartPieOverTimeComponent } from '../ot/chart/chart-pie-over-time/chart-pie-over-time.component';
+// import { ChartBarOverTimeComponent } from '../ot/chart/chart-bar-over-time/chart-bar-over-time.component';
+import { log } from "ng-zorro-antd/core/logger";
+import { ExcelExportService } from "../../shared/services/excel-export.service";
+import {
+  Subject,
+  fromEvent,
+  debounceTime,
+  takeUntil,
+  BehaviorSubject,
+  Observable,
+  combineLatest,
+} from "rxjs";
+import { map, distinctUntilChanged } from "rxjs/operators";
+```
+
+---
+
+### **BƯỚC 3: 🎯 Component Decorator - ✏️ THAY ĐỔI TÊN**
+
+```typescript
+@Component({
+  selector: 'app-your-component-name', // ✏️ THAY ĐỔI tên selector
+  standalone: true,
+  imports: [
+    // COPY NGUYÊN VẸN - Toàn bộ imports
+    CommonModule,
+    FormsModule,
+    ReactiveFormsModule,
+    NzTableModule,
+    NzTagModule,
+    NzIconModule,
+    NzButtonModule,
+    NzDividerModule,
+    NzStatisticModule,
+    NzCardModule,
+    NzGridModule,
+    NzInputModule,
+    NzDatePickerModule,
+    NzInputNumberModule,
+    NzSelectModule,
+    NzDrawerModule,
+    NzFormModule,
+    NzTimePickerModule,
+    NzSwitchModule,
+    NzAlertModule,
+    NzModalModule,
+    NzCheckboxModule,
+    NzPopconfirmModule,
+    NzSpinModule,
+    // ✏️ Bỏ chart components nếu không cần
+    // ChartPieOverTimeComponent,
+    // ChartBarOverTimeComponent
+  ],
+  templateUrl: './your-component-name.component.html', // ✏️ THAY ĐỔI tên file
+  styleUrls: ['./your-component-name.component.css']   // ✏️ THAY ĐỔI tên file
+})
+```
+
+---
+
+### **BƯỚC 4: 🏗️ Class Declaration và Properties**
+
+```typescript
+export class YourComponentNameComponent extends BaseComponent implements OnInit, OnDestroy {
+
+  // === COPY NGUYÊN VẸN - ViewChild cho infinite scroll ===
+  @ViewChild('tableContainer', { static: false }) tableContainer!: ElementRef;
+
+  // === COPY NGUYÊN VẸN - Dependency Injection ===
+  private excelExportService = inject(ExcelExportService);
+
+  // === COPY NGUYÊN VẸN - Infinite Scroll Properties ===
+  private destroy$ = new Subject<void>();
+  private readonly ITEMS_PER_LOAD = 20;
+  private currentLoadedItems = 0;
+  public allFilteredData: YourDataModel[] = []; // ✏️ Thay type
+  private isLoadingMore = false;
+
+  // === COPY NGUYÊN VẸN - Reactive Data Streams (BehaviorSubject pattern) ===
+  private dataRecords$ = new BehaviorSubject<YourDataModel[]>([]); // ✏️ Thay type và tên
+
+  // ✏️ THAY ĐỔI - Filter criteria theo fields của bạn
+  private searchFilters$ = new BehaviorSubject<{
+    searchText: string;
+    selectedStatus: number | null;
+    selectedCategory: string | null;
+    startDate: Date | null;
+    endDate: Date | null;
+  }>({
+    searchText: '',
+    selectedStatus: null,
+    selectedCategory: null,
+    startDate: null,
+    endDate: null
+  });
+
+  // === COPY NGUYÊN VẸN - Loading states ===
+  private isLoading$ = new BehaviorSubject<boolean>(false);
+  private currentLoadedItems$ = new BehaviorSubject<number>(0);
+  public isLoadingMore$ = new BehaviorSubject<boolean>(false);
+
+  // === COPY NGUYÊN VẸN - Computed Observables ===
+  public filteredData$: Observable<YourDataModel[]>; // ✏️ Thay type
+  public displayedData$: Observable<YourDataModel[]>; // ✏️ Thay type
+  public loadingState$: Observable<boolean>;
+  public canLoadMore$: Observable<boolean>;
+  public loadedItemsInfo$: Observable<string>;
+
+  // === ✏️ THAY ĐỔI - Data properties theo model của bạn ===
+  dataRecords: YourDataModel[] = [];           // ✏️ Thay type và tên
+  filteredDataRecords: YourDataModel[] = [];   // ✏️ Thay type và tên
+
+  // === COPY NGUYÊN VẸN - Selection properties ===
+  selectedRecords = new Set<number>();
+  allChecked = false;
+  indeterminate = false;
+
+  // === COPY NGUYÊN VẸN - UI State properties ===
+  isLoading = false;
+  isSubmitting = false;
+  drawerVisible = false;
+  chartVisible = false;
+  chartBarVisible = false;
+  isStatsVisible = true;
+  expandedRowSet = new Set<number>();
+
+  // === COPY NGUYÊN VẸN - Form property ===
+  form!: FormGroup;
+
+  // === ✏️ THAY ĐỔI - Search filters theo fields của bạn ===
+  searchFilters = {
+    name: '',               // ✏️ Filter theo tên
+    code: '',               // ✏️ Filter theo mã
+    status: null as number | null,  // ✏️ Filter theo trạng thái
+    category: '',           // ✏️ Filter theo danh mục
+    createBy: '',           // ✏️ Filter theo người tạo
+    createDate: null as Date | null, // ✏️ Filter theo ngày tạo
+  };
+
+  // === ✏️ THAY ĐỔI - Dropdown options theo data của bạn ===
+  statusOptions = [
+    { label: 'Tất cả', value: null },
+    { label: 'Hoạt động', value: 1 },
+    { label: 'Ngừng hoạt động', value: 0 }
+  ];
+
+  categoryOptions = [
+    { label: 'Tất cả', value: null },
+    { label: 'Loại A', value: 'A' },
+    { label: 'Loại B', value: 'B' }
+  ];
+```
+
+---
+
+### **BƯỚC 5: 🔧 Constructor - COPY NGUYÊN VẸN**
+
+```typescript
+  constructor() {
+    super();
+
+    // === COPY NGUYÊN VẸN - Khởi tạo computed observables ===
+    // Reactive filtering - tự động filter khi data hoặc criteria thay đổi
+    this.filteredData$ = combineLatest([
+      this.dataRecords$, // ✏️ Chỉ thay tên variable
+      this.searchFilters$
+    ]).pipe(
+      map(([records, filters]) => this.filterRecordsReactive(records, filters)),
+      distinctUntilChanged() // Chỉ emit khi data thực sự thay đổi
+    );
+
+    // Reactive display data - chỉ hiển thị số items theo infinite scroll
+    this.displayedData$ = combineLatest([
+      this.filteredData$,
+      this.currentLoadedItems$
+    ]).pipe(
+      map(([filteredData, loadedCount]) => filteredData.slice(0, loadedCount)),
+      distinctUntilChanged()
+    );
+
+    // Tổng hợp loading state từ nhiều nguồn
+    this.loadingState$ = combineLatest([
+      this.isLoading$,
+      this.isLoadingMore$
+    ]).pipe(
+      map(([isLoading, isLoadingMore]) => isLoading || isLoadingMore)
+    );
+
+    // Kiểm tra có thể load thêm data không
+    this.canLoadMore$ = combineLatest([
+      this.filteredData$,
+      this.currentLoadedItems$
+    ]).pipe(
+      map(([filteredData, loadedCount]) => loadedCount < filteredData.length)
+    );
+
+    // Thông tin hiển thị số items đã load
+    this.loadedItemsInfo$ = combineLatest([
+      this.currentLoadedItems$,
+      this.filteredData$
+    ]).pipe(
+      map(([loadedCount, filteredData]) =>
+        `Đã hiển thị ${loadedCount} / ${filteredData.length} bản ghi`
+      )
+    );
+  }
+```
+
+---
+
+### **BƯỚC 6: 🔄 Lifecycle Hooks**
+
+```typescript
+  // === COPY NGUYÊN VẸN - ngOnInit ===
+  ngOnInit(): void {
+    // 1️⃣ Setup form nếu cần
+    this.initForm();
+
+    // 2️⃣ ⚡ QUAN TRỌNG: Chỉ cần thay đổi method này
+    this.loadYourData(); // ✏️ Đây là method duy nhất cần thay đổi API
+
+    // 3️⃣ Copy các setup khác
+    this.setupInfiniteScroll();
+    this.setupReactiveSubscriptions();
+  }
+
+  // === COPY NGUYÊN VẸN - ngOnDestroy ===
+  ngOnDestroy(): void {
+    this.destroy$.next();    // Emit destroy signal
+    this.destroy$.complete(); // Complete destroy subject
+  }
+
+  // === COPY NGUYÊN VẸN - setupReactiveSubscriptions ===
+  private setupReactiveSubscriptions(): void {
+    // 📊 Subscribe vào filtered data để update allFilteredData (backward compatibility)
+    this.filteredData$.pipe(
+      takeUntil(this.destroy$)
+    ).subscribe(filteredData => {
+      this.allFilteredData = filteredData;
+      // Reset infinite scroll khi filtered data thay đổi
+      this.currentLoadedItems$.next(Math.min(this.ITEMS_PER_LOAD, filteredData.length));
+    });
+
+    // 📱 Subscribe vào displayed data để update table display
+    this.displayedData$.pipe(
+      takeUntil(this.destroy$)
+    ).subscribe(displayedData => {
+      this.filteredDataRecords = displayedData; // ✏️ Đổi tên variable
+      this.refreshCheckStatus(); // Refresh trạng thái checkbox
+    });
+
+    // ⏳ Update loading state khi isLoadingMore thay đổi
+    this.isLoadingMore$.pipe(
+      takeUntil(this.destroy$)
+    ).subscribe(isLoadingMore => {
+      this.isLoadingMore = isLoadingMore;
+    });
+  }
+```
+
+---
+
+### **BƯỚC 7: ⚡ API METHOD - DUY NHẤT CẦN THAY ĐỔI**
+
+```typescript
+  /**
+   * ⚡ ĐÂY LÀ METHOD DUY NHẤT CẦN THAY ĐỔI API
+   * Thay đổi service call và data mapping theo API của bạn
+   */
+  loadYourData(): void {
+    this.isLoading$.next(true);
+
+    // 🔄 THAY ĐỔI TẠI ĐÂY - Gọi API service của bạn
+    this.yourService.getAllYourData().subscribe({
+      next: (apiResponse: any) => {
+        // 📋 Map response data theo interface của bạn
+        this.dataRecords = apiResponse.data.map((item: any) => ({
+          id: item.id,
+          name: item.name,
+          code: item.code,
+          status: item.status,
+          createDate: new Date(item.createDate),
+          createBy: item.createBy,
+          // ✏️ Map các field khác theo interface của bạn...
+          checked: false // Luôn set false cho checkbox
+        }));
+
+        console.log('📊 Data Loaded:', this.dataRecords);
+
+        // ⚡ UPDATE REACTIVE SOURCE - Giữ nguyên phần này
+        this.dataRecords$.next(this.dataRecords);
+        this.applyFilters();
+        this.isLoading$.next(false);
+      },
+      error: (error: HttpErrorResponse) => {
+        this.showMessage("error", error.error);
+        this.isLoading$.next(false);
+      },
+    });
+  }
+```
+
+---
+
+### **BƯỚC 8: 🔍 Filter System**
+
+```typescript
+  // ✏️ THAY ĐỔI - Filter logic theo fields của data model
+  private filterRecordsReactive(records: YourDataModel[], filters: any): YourDataModel[] {
+    return records.filter(record => {
+      // Tìm kiếm text trong name, code
+      const matchesSearchText = this.matchesFilter(record.name || '', filters.searchText) ||
+        this.matchesFilter(record.code || '', filters.searchText);
+
+      // Filter theo status
+      const matchesStatus = filters.selectedStatus === null || record.status === filters.selectedStatus;
+
+      // Filter theo category (nếu có)
+      const matchesCategory = !filters.selectedCategory || record.category === filters.selectedCategory;
+
+      // Filter theo date range
+      const matchesDateRange = (!filters.startDate || new Date(record.createDate) >= filters.startDate) &&
+        (!filters.endDate || new Date(record.createDate) <= filters.endDate);
+
+      return matchesSearchText && matchesStatus && matchesCategory && matchesDateRange;
+    });
+  }
+
+  // === COPY NGUYÊN VẸN - matchesFilter method ===
+  private matchesFilter(value: string, searchText: string): boolean {
+    if (!searchText) return true;
+    return value.toLowerCase().includes(searchText.toLowerCase());
+  }
+
+  // ✏️ THAY ĐỔI - onSearchChange theo searchFilters của bạn
+  onSearchChange(): void {
+    // Apply filters qua reactive streams
+    this.searchFilters$.next({
+      searchText: this.searchFilters.name + ' ' + this.searchFilters.code, // Combine search fields
+      selectedStatus: this.searchFilters.status,
+      selectedCategory: this.searchFilters.category,
+      startDate: this.searchFilters.createDate,
+      endDate: null // Có thể thêm endDate nếu cần
+    });
+  }
+
+  // === COPY NGUYÊN VẸN - applyFilters ===
+  applyFilters(): void {
+    this.onSearchChange();
+  }
+
+  // === COPY NGUYÊN VẸN - hasActiveFilters ===
+  hasActiveFilters(): boolean {
+    return this.searchFilters.name !== '' ||
+           this.searchFilters.code !== '' ||
+           this.searchFilters.status !== null ||
+           this.searchFilters.category !== '' ||
+           this.searchFilters.createDate !== null;
+  }
+
+  // === COPY NGUYÊN VẸN - clearAllFilters ===
+  clearAllFilters(): void {
+    this.searchFilters = {
+      name: '',
+      code: '',
+      status: null,
+      category: '',
+      createBy: '',
+      createDate: null
+    };
+    this.applyFilters();
+  }
+```
+
+---
+
+### **BƯỚC 9: ♾️ Infinite Scroll - COPY NGUYÊN VẸN**
+
+```typescript
+  // === COPY NGUYÊN VẸN - Toàn bộ infinite scroll implementation ===
+
+  private setupInfiniteScroll(): void {
+    // Chờ table container được render (1 giây timeout)
+    setTimeout(() => {
+      if (this.tableContainer?.nativeElement) {
+        // Listen scroll events với debouncing 100ms
+        fromEvent(this.tableContainer.nativeElement, 'scroll')
+          .pipe(
+            debounceTime(100), // Debounce để tránh quá nhiều events
+            takeUntil(this.destroy$) // Cleanup khi component destroy
+          )
+          .subscribe(() => {
+            this.checkForInfiniteScroll(); // Kiểm tra có cần load thêm không
+          });
+      }
+    }, 1000);
+  }
+
+  private checkForInfiniteScroll(): void {
+    const container = this.tableContainer?.nativeElement;
+    if (!container) return;
+
+    // Threshold 100px từ cuối để trigger load more
+    const threshold = 100;
+    const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - threshold;
+
+    if (isNearBottom) {
+      this.loadMoreItems(); // Load thêm items
+    }
+  }
+
+  private canLoadMore(): boolean {
+    return this.currentLoadedItems$.value < this.allFilteredData.length;
+  }
+
+  private loadMoreItems(): void {
+    // Check conditions trước khi load
+    const canLoad = this.currentLoadedItems$.value < this.allFilteredData.length;
+    const isCurrentlyLoading = this.isLoadingMore$.value;
+
+    if (!canLoad || isCurrentlyLoading) return;
+
+    // Set loading state
+    this.isLoadingMore$.next(true);
+
+    // Simulate loading delay cho UX tốt hơn
+    setTimeout(() => {
+      const currentCount = this.currentLoadedItems$.value;
+      const newCount = Math.min(currentCount + this.ITEMS_PER_LOAD, this.allFilteredData.length);
+
+      // Update số items đã load
+      this.currentLoadedItems$.next(newCount);
+      this.isLoadingMore$.next(false);
+    }, 300);
+  }
+
+  // === Infinite scroll getters ===
+  get hasMoreData(): Observable<boolean> {
+    return this.canLoadMore$;
+  }
+
+  get loadedItemsInfo(): Observable<string> {
+    return this.loadedItemsInfo$;
+  }
+
+  private resetInfiniteScroll(): void {
+    this.currentLoadedItems$.next(0);
+    this.isLoadingMore$.next(false);
+  }
+
+  private loadInitialItems(): void {
+    const initialLoadCount = Math.min(this.ITEMS_PER_LOAD, this.allFilteredData.length);
+    this.currentLoadedItems$.next(initialLoadCount);
+  }
+```
+
+---
+
+### **BƯỚC 10: ☑️ Multi-Selection System - COPY NGUYÊN VẸN**
+
+```typescript
+  // === COPY NGUYÊN VẸN - Toàn bộ multi-selection system ===
+
+  updateAllChecked(): void {
+    this.indeterminate = false;
+    if (this.allChecked) {
+      this.selectedRecords.clear();
+      this.filteredDataRecords.forEach(record => { // ✏️ Đổi variable name
+        this.selectedRecords.add(record.id);
+        record.checked = true;
+      });
+    } else {
+      this.selectedRecords.clear();
+      this.filteredDataRecords.forEach(record => { // ✏️ Đổi variable name
+        record.checked = false;
+      });
+    }
+  }
+
+  updateSingleChecked(record: YourDataModel): void { // ✏️ Thay type
+    if (record.checked) {
+      this.selectedRecords.add(record.id);
+    } else {
+      this.selectedRecords.delete(record.id);
+    }
+    this.refreshCheckStatus();
+  }
+
+  refreshCheckStatus(): void {
+    const allRecordsChecked = this.filteredDataRecords.every(record => record.checked); // ✏️ Đổi variable name
+    const someRecordsChecked = this.filteredDataRecords.some(record => record.checked); // ✏️ Đổi variable name
+
+    this.allChecked = allRecordsChecked && this.filteredDataRecords.length > 0; // ✏️ Đổi variable name
+    this.indeterminate = someRecordsChecked && !allRecordsChecked;
+  }
+
+  clearSelection(): void {
+    this.selectedRecords.clear();
+    this.allChecked = false;
+    this.indeterminate = false;
+    this.dataRecords.forEach(record => { // ✏️ Đổi variable name
+      record.checked = false;
+    });
+  }
+
+  // === Selection getters ===
+  get selectedCount(): number {
+    return this.selectedRecords.size;
+  }
+
+  get hasSelectedRecords(): boolean {
+    return this.selectedRecords.size > 0;
+  }
+
+  get canApproveSelected(): boolean {
+    return this.hasSelectedRecords;
+  }
+
+  get canDeleteSelected(): boolean {
+    return this.hasSelectedRecords;
+  }
+```
+
+---
+
+### **BƯỚC 11: 🔧 Form Management (Nếu có form)**
+
+```typescript
+  // === ✏️ THAY ĐỔI - Form theo fields của data model ===
+  private initForm(): void {
+    this.form = this.fb.group({
+      name: ['', [Validators.required, Validators.minLength(2)]], // ✏️ Thay field
+      code: ['', [Validators.required, Validators.minLength(3)]], // ✏️ Thay field
+      status: [1, Validators.required],                           // ✏️ Thay field
+      category: [''],                                             // ✏️ Thay field
+      createDate: [new Date(), Validators.required],              // ✏️ Thay field
+      // ✏️ Thêm các field khác...
+    });
+
+    // Setup form value changes nếu cần
+    this.form.valueChanges.subscribe(() => {
+      // Custom logic khi form thay đổi
+    });
+  }
+
+  // === COPY NGUYÊN VẸN - Form utility methods ===
+  override resetForm(): void {
+    this.form.reset();
+    this.form.patchValue({
+      createDate: new Date(),
+      status: 1
+    });
+  }
+
+  private markFormGroupTouched(): void {
+    Object.keys(this.form.controls).forEach(key => {
+      this.form.get(key)?.markAsTouched();
+    });
+  }
+
+  // === COPY NGUYÊN VẸN - Drawer methods ===
+  openDrawer(): void {
+    this.drawerVisible = true;
+    this.resetForm();
+  }
+
+  closeDrawer(): void {
+    this.drawerVisible = false;
+    this.resetForm();
+  }
+```
+
+---
+
+### **BƯỚC 12: 💾 CRUD Operations**
+
+```typescript
+  // ✏️ THAY ĐỔI - onSubmit theo data model và API của bạn
+  onSubmit(): void {
+    if (this.form.valid) {
+      this.isSubmitting = true;
+      const formData = this.form.value;
+
+      // 📝 Map form data theo model của bạn
+      const newRecord: YourDataModel = {
+        id: this.getNextId(),
+        name: formData.name,
+        code: formData.code,
+        status: formData.status,
+        category: formData.category || '',
+        createDate: formData.createDate,
+        createBy: 'admin', // ✏️ Lấy từ user context
+        // ✏️ Map các field khác...
+        checked: false
+      };
+
+      // 🔄 THAY ĐỔI API call
+      this.yourService.create(newRecord).subscribe({
+        next: (apiResponse: any) => {
+          // === GIỮ NGUYÊN - Update reactive streams ===
+          this.dataRecords.unshift(newRecord);
+          this.dataRecords$.next(this.dataRecords);
+          this.applyFilters();
+          this.showMessage('success', 'Tạo mới thành công!');
+          this.closeDrawer();
+          this.isSubmitting = false;
+        },
+        error: (error: HttpErrorResponse) => {
+          this.showMessage("error", error.error);
+          this.isSubmitting = false;
+        },
+      });
+    } else {
+      this.markFormGroupTouched();
+      this.showMessage('error', 'Vui lòng kiểm tra lại thông tin form!');
+    }
+  }
+
+  // === COPY NGUYÊN VẸN - Utility methods ===
+  private getNextId(): number {
+    return Math.max(...this.dataRecords.map(r => r.id), 0) + 1; // ✏️ Đổi variable name
+  }
+
+  // ✏️ THAY ĐỔI - Bulk operations theo API của bạn
+  bulkApprove(): void {
+    const selectedIds = Array.from(this.selectedRecords);
+    if (selectedIds.length === 0) return;
+
+    this.isSubmitting = true;
+
+    // 🔄 THAY ĐỔI API call
+    this.yourService.bulkApprove(selectedIds).subscribe({
+      next: (response: any) => {
+        // Update local data
+        selectedIds.forEach(id => {
+          const record = this.dataRecords.find(r => r.id === id);
+          if (record) {
+            record.status = 1; // ✏️ Set approved status
+          }
+        });
+
+        // Update reactive streams
+        this.dataRecords$.next(this.dataRecords);
+        this.applyFilters();
+        this.showMessage('success', `Đã duyệt ${selectedIds.length} bản ghi!`);
+        this.clearSelection();
+        this.isSubmitting = false;
+      },
+      error: (error: HttpErrorResponse) => {
+        this.showMessage("error", error.error);
+        this.isSubmitting = false;
+      },
+    });
+  }
+
+  bulkReject(): void {
+    // Tương tự bulkApprove nhưng set status = 0
+  }
+
+  bulkDelete(): void {
+    const selectedIds = Array.from(this.selectedRecords);
+    if (selectedIds.length === 0) return;
+
+    this.isSubmitting = true;
+
+    // 🔄 THAY ĐỔI API call
+    this.yourService.bulkDelete(selectedIds).subscribe({
+      next: (response: any) => {
+        // Remove from local data
+        this.dataRecords = this.dataRecords.filter(record => !selectedIds.includes(record.id));
+
+        // Update reactive streams
+        this.dataRecords$.next(this.dataRecords);
+        this.applyFilters();
+        this.showMessage('success', `Đã xóa ${selectedIds.length} bản ghi!`);
+        this.clearSelection();
+        this.isSubmitting = false;
+      },
+      error: (error: HttpErrorResponse) => {
+        this.showMessage("error", error.error);
+        this.isSubmitting = false;
+      },
+    });
+  }
+```
+
+---
+
+### **BƯỚC 13: 🎨 Utility Methods**
+
+```typescript
+  // === ✏️ THAY ĐỔI - Status/Color methods theo data của bạn ===
+  getStatusText(status: number | undefined): string {
+    switch (status) {
+      case 0: return 'Ngừng hoạt động';
+      case 1: return 'Hoạt động';
+      default: return 'Không xác định';
+    }
+  }
+
+  getStatusColor(status: number | undefined): string {
+    switch (status) {
+      case 0: return 'red';
+      case 1: return 'green';
+      default: return 'default';
+    }
+  }
+
+  getCategoryColor(category: string): string {
+    switch (category) {
+      case 'A': return 'blue';
+      case 'B': return 'green';
+      case 'C': return 'purple';
+      default: return 'default';
+    }
+  }
+
+  // === COPY NGUYÊN VẸN - Date formatting ===
+  override formatDate(date: Date | undefined | string): string {
+    if (!date) return '';
+    const d = new Date(date);
+    return d.toLocaleDateString('vi-VN');
+  }
+
+  formatDateTime(date: Date | undefined): string {
+    if (!date) return '';
+    return new Date(date).toLocaleString('vi-VN');
+  }
+
+  // === COPY NGUYÊN VẸN - Chart methods (nếu cần) ===
+  openChart(): void {
+    this.chartVisible = true;
+  }
+
+  closeChart(): void {
+    this.chartVisible = false;
+  }
+
+  openChartBar(): void {
+    this.chartBarVisible = true;
+  }
+
+  closeChartBar(): void {
+    this.chartBarVisible = false;
+  }
+
+  // === COPY NGUYÊN VẸN - Excel export ===
+  exportToExcel(): void {
+    try {
+      // Determine which data to export
+      const dataToExport = this.hasActiveFilters() ? this.allFilteredData : this.dataRecords;
+
+      if (dataToExport.length === 0) {
+        this.showMessage('warning', 'Không có dữ liệu để xuất!');
+        return;
+      }
+
+      // ✏️ THAY ĐỔI - Define export columns theo data model
+      const exportColumns = [
+        { header: 'ID', key: 'id', width: 10 },
+        { header: 'Tên', key: 'name', width: 20 },
+        { header: 'Mã', key: 'code', width: 15 },
+        { header: 'Trạng thái', key: 'status', width: 15 },
+        { header: 'Danh mục', key: 'category', width: 15 },
+        { header: 'Người tạo', key: 'createBy', width: 15 },
+        { header: 'Ngày tạo', key: 'createDate', width: 15 },
+      ];
+
+      // Generate file name
+      const currentDate = new Date().toISOString().split('T')[0];
+      const fileName = `Your_Data_Export_${currentDate}.xlsx`; // ✏️ Đổi tên file
+
+      // Export using the service
+      this.excelExportService.exportWithColumns(dataToExport, exportColumns, {
+        fileName: fileName,
+        sheetName: 'Data Export', // ✏️ Đổi tên sheet
+        showRowNumbers: true
+      });
+
+      // Show success message
+      const exportType = this.hasActiveFilters() ? 'đã lọc' : 'toàn bộ';
+      this.showMessage('success', `Đã xuất ${exportType} ${dataToExport.length} bản ghi ra file Excel: ${fileName}`);
+    } catch (error) {
+      console.error('Error exporting to Excel:', error);
+      this.showMessage('error', 'Có lỗi xảy ra khi xuất file Excel!');
+    }
+  }
+```
+
+---
+
+### **BƯỚC 14: 📱 HTML Template**
+
+#### 14.1 **Cấu trúc chính - COPY VÀ CHỈNH SỬA**
+
+```html
+<div class="space-y-4">
+  <!-- Statistics Overview -->
+  <div class="flex justify-between items-center mb-1">
+    <h3 class="text-lg font-medium">Thống kê tổng quan</h3>
+    <!-- ✏️ Đổi title -->
+    <button
+      nz-button
+      nzType="default"
+      nzSize="small"
+      (click)="isStatsVisible = !isStatsVisible"
+    >
+      <nz-icon [nzType]="isStatsVisible ? 'eye-invisible' : 'eye'"></nz-icon>
+      {{ isStatsVisible ? 'Ẩn thống kê' : 'Hiện thống kê' }}
+    </button>
+  </div>
+
+  <!-- ✏️ THAY ĐỔI - Statistics cards theo metrics của bạn -->
+  <nz-row [nzGutter]="8" class="mb-2" *ngIf="isStatsVisible">
+    <nz-col [nzXs]="12" [nzSm]="12" [nzMd]="6" [nzLg]="6">
+      <nz-card [nzSize]="'small'" [nzBodyStyle]="{ padding: '12px' }">
+        <div class="stat-title" style="font-size: 14px;">Tổng số bản ghi</div>
+        <nz-statistic
+          [nzValue]="allFilteredData.length"
+          nzPrefix="📊"
+          [nzValueStyle]="{ color: '#1890ff', fontSize: '16px' }"
+        >
+        </nz-statistic>
+      </nz-card>
+    </nz-col>
+    <nz-col [nzXs]="12" [nzSm]="12" [nzMd]="6" [nzLg]="6">
+      <nz-card [nzSize]="'small'" [nzBodyStyle]="{ padding: '12px' }">
+        <div class="stat-title" style="font-size: 14px;">Hoạt động</div>
+        <nz-statistic
+          [nzValue]="(allFilteredData | filter:'status':1).length"
+          nzPrefix="✅"
+          [nzValueStyle]="{ color: '#52c41a', fontSize: '16px' }"
+        >
+        </nz-statistic>
+      </nz-card>
+    </nz-col>
+    <!-- ✏️ Thêm các thống kê khác... -->
+  </nz-row>
+
+  <nz-divider nzText="Danh sách dữ liệu" nzOrientation="left"></nz-divider>
+  <!-- ✏️ Đổi text -->
+
+  <!-- Main Data Table -->
+  <nz-card nzTitle="Chi tiết dữ liệu">
+    <!-- ✏️ Đổi title -->
+    <!-- Search summary - COPY NGUYÊN VẸN -->
+    <div class="mb-4 flex justify-between items-center">
+      <div class="flex items-center space-x-4">
+        <span class="text-sm text-gray-600">
+          <strong>{{ (loadedItemsInfo$ | async) }}</strong> trong tổng số {{
+          dataRecords.length }} bản ghi
+          <span *ngIf="hasActiveFilters()" class="text-blue-600">(đã lọc)</span>
+        </span>
+        <span
+          *ngIf="hasActiveFilters()"
+          class="text-xs text-orange-600 bg-orange-100 px-2 py-1 rounded"
+        >
+          Có bộ lọc đang hoạt động
+        </span>
+      </div>
+      <div class="flex items-center space-x-2">
+        <button nz-button nzType="primary" (click)="openDrawer()">
+          <nz-icon nzType="plus"></nz-icon>
+          Thêm mới
+          <!-- ✏️ Đổi text -->
+        </button>
+        <button nz-button nzType="default" (click)="exportToExcel()">
+          <nz-icon nzType="download"></nz-icon>
+          Xuất Excel
+        </button>
+        <button
+          nz-button
+          nzType="default"
+          nzSize="small"
+          (click)="clearAllFilters()"
+          *ngIf="hasActiveFilters()"
+        >
+          <nz-icon nzType="clear"></nz-icon>
+          Xóa tất cả bộ lọc
+        </button>
+      </div>
+    </div>
+
+    <!-- Bulk Actions Bar - COPY NGUYÊN VẸN -->
+    <div
+      *ngIf="hasSelectedRecords"
+      class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg"
+    >
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <span class="text-sm font-medium text-blue-800">
+            Đã chọn {{ selectedCount }} bản ghi
+          </span>
+          <button
+            nz-button
+            nzSize="small"
+            nzType="link"
+            (click)="clearSelection()"
+          >
+            <nz-icon nzType="close"></nz-icon>
+            Bỏ chọn tất cả
+          </button>
+        </div>
+        <div class="flex items-center space-x-2">
+          <button
+            nz-button
+            nzType="primary"
+            nzSize="small"
+            [nzLoading]="isSubmitting"
+            [disabled]="!canApproveSelected"
+            (click)="bulkApprove()"
+          >
+            <nz-icon nzType="check"></nz-icon>
+            Duyệt hàng loạt
+          </button>
+          <button
+            nz-button
+            nzType="default"
+            nzSize="small"
+            [nzLoading]="isSubmitting"
+            [disabled]="!canApproveSelected"
+            (click)="bulkReject()"
+          >
+            <nz-icon nzType="close"></nz-icon>
+            Từ chối hàng loạt
+          </button>
+          <button
+            nz-button
+            nzType="primary"
+            nzDanger
+            nzSize="small"
+            [nzLoading]="isSubmitting"
+            [disabled]="!canDeleteSelected"
+            nz-popconfirm
+            nzPopconfirmTitle="Bạn có chắc chắn muốn xóa các bản ghi đã chọn?"
+            (nzOnConfirm)="bulkDelete()"
+          >
+            <nz-icon nzType="delete"></nz-icon>
+            Xóa hàng loạt
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Table với Infinite Scroll - COPY VÀ CHỈNH SỬA -->
+    <div
+      #tableContainer
+      class="infinite-scroll-container"
+      style="max-height: 600px; overflow-y: auto;"
+    >
+      <nz-table
+        #dataTable
+        [nzData]="filteredDataRecords"
+        [nzLoading]="loadingState$ | async"
+        nzSize="small"
+        [nzFrontPagination]="false"
+        [nzShowPagination]="false"
+      >
+        <thead>
+          <!-- ✏️ THAY ĐỔI - Header row theo columns của bạn -->
+          <tr>
+            <th nzAlign="center" nzWidth="50px">
+              <label
+                nz-checkbox
+                [(ngModel)]="allChecked"
+                [nzIndeterminate]="indeterminate"
+                (ngModelChange)="updateAllChecked()"
+              >
+              </label>
+            </th>
+            <th nzAlign="center" nzSortKey="code">Mã</th>
+            <th nzAlign="left" nzSortKey="name">Tên</th>
+            <th nzAlign="center" nzSortKey="status">Trạng thái</th>
+            <th nzAlign="center" nzSortKey="category">Danh mục</th>
+            <th nzAlign="center" nzSortKey="createDate">Ngày tạo</th>
+            <th nzAlign="center">Người tạo</th>
+            <th nzAlign="center">Thao tác</th>
+          </tr>
+
+          <!-- ✏️ THAY ĐỔI - Search row theo filters của bạn -->
+          <tr style="background-color: #fafafa;">
+            <th nzAlign="center" style="padding: 8px 4px;"></th>
+            <th nzAlign="center" style="padding: 8px 4px;">
+              <input
+                nz-input
+                placeholder="Tìm mã"
+                [(ngModel)]="searchFilters.code"
+                (ngModelChange)="onSearchChange()"
+                style="font-size: 12px; height: 24px;"
+              />
+            </th>
+            <th nzAlign="center" style="padding: 8px 4px;">
+              <input
+                nz-input
+                placeholder="Tìm tên"
+                [(ngModel)]="searchFilters.name"
+                (ngModelChange)="onSearchChange()"
+                style="font-size: 12px; height: 24px;"
+              />
+            </th>
+            <th nzAlign="center" style="padding: 8px 4px;">
+              <nz-select
+                nzPlaceHolder="Trạng thái"
+                [(ngModel)]="searchFilters.status"
+                (ngModelChange)="onSearchChange()"
+                nzSize="small"
+                style="width: 100%;"
+              >
+                <nz-option
+                  *ngFor="let status of statusOptions"
+                  [nzLabel]="status.label"
+                  [nzValue]="status.value"
+                >
+                </nz-option>
+              </nz-select>
+            </th>
+            <th nzAlign="center" style="padding: 8px 4px;">
+              <nz-select
+                nzPlaceHolder="Danh mục"
+                [(ngModel)]="searchFilters.category"
+                (ngModelChange)="onSearchChange()"
+                nzSize="small"
+                style="width: 100%;"
+              >
+                <nz-option
+                  *ngFor="let cat of categoryOptions"
+                  [nzLabel]="cat.label"
+                  [nzValue]="cat.value"
+                >
+                </nz-option>
+              </nz-select>
+            </th>
+            <th nzAlign="center" style="padding: 8px 4px;">
+              <nz-date-picker
+                nzPlaceHolder="Tìm ngày"
+                [(ngModel)]="searchFilters.createDate"
+                (ngModelChange)="onSearchChange()"
+                nzSize="small"
+                style="width: 100%;"
+              >
+              </nz-date-picker>
+            </th>
+            <th nzAlign="center" style="padding: 8px 4px;">
+              <input
+                nz-input
+                placeholder="Người tạo"
+                [(ngModel)]="searchFilters.createBy"
+                (ngModelChange)="onSearchChange()"
+                style="font-size: 12px; height: 24px;"
+              />
+            </th>
+            <th nzAlign="center" style="padding: 8px 4px;">
+              <button
+                nz-button
+                nzType="link"
+                nzSize="small"
+                (click)="clearAllFilters()"
+              >
+                <nz-icon nzType="clear"></nz-icon>
+              </button>
+            </th>
+          </tr>
+        </thead>
+
+        <tbody>
+          <!-- Empty state - COPY NGUYÊN VẸN -->
+          <tr
+            *ngIf="filteredDataRecords.length === 0 && !(loadingState$ | async)"
+          >
+            <td colspan="8" class="text-center py-8 text-gray-500">
+              <!-- ✏️ Adjust colspan -->
+              <div class="flex flex-col items-center space-y-2">
+                <nz-icon
+                  nzType="inbox"
+                  nzTheme="outline"
+                  class="text-4xl"
+                ></nz-icon>
+                <span *ngIf="hasActiveFilters(); else noDataTemplate">
+                  Không tìm thấy kết quả phù hợp với bộ lọc hiện tại
+                </span>
+                <ng-template #noDataTemplate>
+                  <span>Chưa có dữ liệu</span>
+                </ng-template>
+                <button
+                  *ngIf="hasActiveFilters()"
+                  nz-button
+                  nzType="link"
+                  nzSize="small"
+                  (click)="clearAllFilters()"
+                >
+                  Xóa bộ lọc để xem tất cả
+                </button>
+              </div>
+            </td>
+          </tr>
+
+          <!-- ✏️ THAY ĐỔI - Data rows theo columns của bạn -->
+          <tr *ngFor="let record of filteredDataRecords; let i = index">
+            <td nzAlign="center">
+              <label
+                nz-checkbox
+                [(ngModel)]="record.checked"
+                (ngModelChange)="updateSingleChecked(record)"
+              >
+              </label>
+            </td>
+            <td nzAlign="center">
+              <strong>{{ record.code }}</strong>
+            </td>
+            <td>{{ record.name }}</td>
+            <td nzAlign="center">
+              <nz-tag [nzColor]="getStatusColor(record.status)">
+                {{ getStatusText(record.status) }}
+              </nz-tag>
+            </td>
+            <td nzAlign="center">
+              <nz-tag nzColor="purple" *ngIf="record.category">
+                {{ record.category }}
+              </nz-tag>
+              <span *ngIf="!record.category" class="text-gray-400">N/A</span>
+            </td>
+            <td nzAlign="center">
+              <span class="text-sm">{{ formatDate(record.createDate) }}</span>
+            </td>
+            <td nzAlign="center">
+              <nz-tag nzColor="green">{{ record.createBy || 'N/A' }}</nz-tag>
+            </td>
+            <td nzAlign="center">
+              <button nz-button nzType="link" nzSize="small">
+                <nz-icon nzType="edit"></nz-icon>
+                Sửa
+              </button>
+              <button nz-button nzType="link" nzSize="small" nzDanger>
+                <nz-icon nzType="delete"></nz-icon>
+                Xóa
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </nz-table>
+    </div>
+  </nz-card>
+</div>
+```
+
+#### 14.2 **Form Drawer - COPY VÀ CHỈNH SỬA**
+
+```html
+  <!-- Form Drawer - ✏️ THAY ĐỔI form fields theo data model -->
+  <nz-drawer
+    [nzVisible]="drawerVisible"
+    nzPlacement="right"
+    nzTitle="Thêm mới dữ liệu"
+    [nzWidth]="500"
+    (nzOnClose)="closeDrawer()">
+
+    <ng-container *nzDrawerContent>
+      <form nz-form [formGroup]="form" (ngSubmit)="onSubmit()">
+
+        <!-- ✏️ THAY ĐỔI - Form fields theo data model của bạn -->
+        <nz-form-item>
+          <nz-form-label nzRequired>Mã</nz-form-label>
+          <nz-form-control nzErrorTip="Vui lòng nhập mã (tối thiểu 3 ký tự)">
+            <input nz-input formControlName="code" placeholder="Nhập mã">
+          </nz-form-control>
+        </nz-form-item>
+
+        <nz-form-item>
+          <nz-form-label nzRequired>Tên</nz-form-label>
+          <nz-form-control nzErrorTip="Vui lòng nhập tên (tối thiểu 2 ký tự)">
+            <input nz-input formControlName="name" placeholder="Nhập tên">
+          </nz-form-control>
+        </nz-form-item>
+
+        <nz-form-item>
+          <nz-form-label nzRequired>Trạng thái</nz-form-label>
+          <nz-form-control>
+            <nz-select formControlName="status" nzPlaceHolder="Chọn trạng thái">
+              <nz-option nzLabel="Hoạt động" [nzValue]="1"></nz-option>
+              <nz-option nzLabel="Ngừng hoạt động" [nzValue]="0"></nz-option>
+            </nz-select>
+          </nz-form-control>
+        </nz-form-item>
+
+        <nz-form-item>
+          <nz-form-label>Danh mục</nz-form-label>
+          <nz-form-control>
+            <nz-select formControlName="category" nzPlaceHolder="Chọn danh mục">
+              <nz-option nzLabel="Loại A" nzValue="A"></nz-option>
+              <nz-option nzLabel="Loại B" nzValue="B"></nz-option>
+            </nz-select>
+          </nz-form-control>
+        </nz-form-item>
+
+        <nz-form-item>
+          <nz-form-label nzRequired>Ngày tạo</nz-form-label>
+          <nz-form-control>
+            <nz-date-picker formControlName="createDate" style="width: 100%;"></nz-date-picker>
+          </nz-form-control>
+        </nz-form-item>
+
+        <!-- Form Actions - COPY NGUYÊN VẸN -->
+        <div class="drawer-footer">
+          <button nz-button nzType="default" (click)="closeDrawer()" style="margin-right: 8px;">
+            Hủy
+          </button>
+          <button nz-button nzType="primary" type="submit" [nzLoading]="isSubmitting"
+                  [disabled]="!form.valid">
+            Lưu
+          </button>
+        </div>
+      </form>
+    </ng-container>
+  </nz-drawer>
+</div>
+```
+
+---
+
+---
+
+### **BƯỚC 15: 📋 Checklist Hoàn Thành**
+
+- [ ] **Interface**: Định nghĩa YourDataModel với field `checked: boolean`
+- [ ] **Imports**: Copy toàn bộ imports Angular + Ng-Zorro
+- [ ] **Component Decorator**: Thay đổi selector và template paths
+- [ ] **Class Properties**: Copy reactive properties, đổi tên variables phù hợp
+- [ ] **Constructor**: Copy nguyên vẹn reactive observables setup
+- [ ] **ngOnInit**: Chỉ thay method `loadYourData()`
+- [ ] **API Method**: Thay đổi service call và data mapping
+- [ ] **Filter Logic**: Cập nhật `filterRecordsReactive()` theo fields
+- [ ] **Search Filters**: Định nghĩa searchFilters object theo model
+- [ ] **Infinite Scroll**: Copy nguyên vẹn toàn bộ implementation
+- [ ] **Multi-Selection**: Copy nguyên vẹn, chỉ đổi type declarations
+- [ ] **Form Setup**: Cập nhật form fields theo data model
+- [ ] **CRUD Operations**: Thay đổi API calls trong onSubmit, bulk operations
+- [ ] **Utility Methods**: Cập nhật getStatusText(), getStatusColor()
+- [ ] **HTML Template**: Copy structure, thay table columns và form fields
+- [ ] **Excel Export**: Định nghĩa export columns theo data model
+
+---
+
+## 🎯 **TÓM TẮT QUAN TRỌNG**
+
+### ⚡ **CHỈ CẦN THAY ĐỔI 5 ĐIỂM CHÍNH:**
+
+1. **📋 Interface YourDataModel** - Định nghĩa data structure
+2. **🔄 Method loadYourData()** - API call duy nhất cần thay
+3. **🔍 filterRecordsReactive()** - Logic filter theo fields
+4. **📊 HTML Table Columns** - Columns hiển thị và search filters
+5. **💾 CRUD API calls** - onSubmit, bulkApprove, bulkDelete methods
+
+### ✅ **COPY NGUYÊN VẸN 95% CODE:**
+
+- **🏗️ Toàn bộ Reactive Architecture** (BehaviorSubject, Observables)
+- **♾️ Infinite Scroll System**
+- **☑️ Multi-Selection Logic**
+- **⏳ Loading States Management**
+- **🎨 UI Components Structure**
+- **📤 Excel Export Framework**
+
+---
+
+## 🚀 **KẾT QUẢ CUỐI CÙNG:**
+
+**🎉 Component hoàn chỉnh với:**
+
+- ✨ **Modern UI** với Ng-Zorro components
+- ⚡ **Performance tối ưu** với infinite scroll
+- 🔍 **Real-time filtering** reactive
+- ☑️ **Bulk operations** với multi-select
+- 📊 **Statistics dashboard** built-in
+- 📤 **Excel export** ready-to-use
+- 📱 **Mobile responsive** design
+
+**⏱️ Thời gian: 1-2 hours thay vì 1-2 ngày phát triển từ đầu!**
+
+---
+
+## � **Troubleshooting Guide:**
+
+**❌ Lỗi thường gặp:**
+
+1. **Property undefined**: Kiểm tra đã đổi tên variables đúng chưa
+2. **Filter không hoạt động**: Kiểm tra logic trong `filterRecordsReactive()`
+3. **Infinite scroll không load**: Kiểm tra `#tableContainer` ViewChild
+4. **API lỗi**: Kiểm tra data mapping trong `loadYourData()`
+5. **Excel export lỗi**: Kiểm tra export columns definition
+
+**✅ Debug steps:**
+
+1. Console.log data trong `loadYourData()`
+2. Kiểm tra `allFilteredData.length` trong template
+3. Test filter từng field một
+4. Kiểm tra reactive streams bằng async pipe
+5. Validate form fields mapping
+
+---
+
+**📞 Hỗ trợ**: Nếu gặp vấn đề, kiểm tra lại FormOtRegisterComponent gốc để so sánh implementation.
